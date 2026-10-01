@@ -15,16 +15,23 @@ const MONO_FONT_CANDIDATES: &[&str] = &["/System/Library/Fonts/SFNSMono.ttf", "/
 
 /// System fonts (in priority order) that cover Japanese glyphs. `egui`
 /// ships only Latin glyphs by default, so without one of these, CJK text
-/// renders as tofu boxes.
+/// renders as tofu boxes. W3 comes first: its stroke weight matches SF's
+/// regular weight, while W4 (especially fullwidth digits) reads as bold.
 const JAPANESE_FONT_CANDIDATES: &[&str] = &[
-    "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
     "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+    "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
 ];
 
 /// A representative fullwidth ideograph, used to measure a CJK font's glyph
 /// advance width relative to its em square.
 const CJK_REFERENCE_CHAR: char = '国';
+
+/// How much of its two-column cell a fullwidth glyph fills in the editor.
+/// Scaling CJK glyphs to fill the cell exactly makes them look noticeably
+/// bigger than the Latin text, so they're drawn a bit smaller and
+/// [`monospace_grid_job`] pads the remainder to keep the grid.
+const CJK_MONO_CELL_FILL: f32 = 0.9;
 
 pub fn setup_fonts(ctx: &egui::Context) {
     ctx.set_fonts(build_font_definitions());
@@ -57,13 +64,14 @@ fn build_font_definitions() -> egui::FontDefinitions {
         // font gets picked (e.g. Menlo instead of SF Mono on an older
         // macOS).
         let ui_tweak = ui.as_deref().and_then(|ui_bytes| cjk_fallback_tweak(ui_bytes, &bytes, false)).unwrap_or_default();
-        push_fallback_font(&mut fonts, "system-japanese-ui", bytes.clone(), ui_tweak, &[egui::FontFamily::Proportional]);
+        insert_fallback_font(&mut fonts, "system-japanese-ui", bytes.clone(), ui_tweak, &[egui::FontFamily::Proportional]);
 
         // The editor additionally needs "1 CJK char = 2 ASCII chars" width,
-        // which only makes sense for a monospace grid.
+        // which only makes sense for a monospace grid. The glyphs are sized
+        // to slightly under two columns; `monospace_grid_job` pads the rest.
         let mono_tweak =
             mono.as_deref().and_then(|mono_bytes| cjk_fallback_tweak(mono_bytes, &bytes, true)).unwrap_or_default();
-        push_fallback_font(&mut fonts, "system-japanese-mono", bytes, mono_tweak, &[egui::FontFamily::Monospace]);
+        insert_fallback_font(&mut fonts, "system-japanese-mono", bytes, mono_tweak, &[egui::FontFamily::Monospace]);
     }
 
     fonts
@@ -90,9 +98,11 @@ fn insert_primary_font(
     }
 }
 
-/// Adds `name` as a last-resort fallback for `families` (used for glyphs
-/// the primary font doesn't cover, e.g. CJK).
-fn push_fallback_font(
+/// Adds `name` as the first fallback for `families` (used for glyphs the
+/// primary font doesn't cover, e.g. CJK). It must come ahead of egui's
+/// bundled fonts: those cover a few CJK-block characters such as
+/// fullwidth digits, which then render in a mismatched weight and size.
+fn insert_fallback_font(
     fonts: &mut egui::FontDefinitions,
     name: &str,
     bytes: Vec<u8>,
@@ -103,7 +113,8 @@ fn push_fallback_font(
         .font_data
         .insert(name.to_owned(), Arc::new(egui::FontData::from_owned(bytes).tweak(tweak)));
     for family in families {
-        fonts.families.entry(family.clone()).or_default().push(name.to_owned());
+        let list = fonts.families.entry(family.clone()).or_default();
+        list.insert(1.min(list.len()), name.to_owned());
     }
 }
 
@@ -127,9 +138,9 @@ const REFERENCE_SIZE: f32 = 16.0;
 
 /// Derives a [`egui::FontTweak`] that puts `cjk_bytes`' glyphs (rendered as
 /// a fallback alongside `latin_bytes`) on the same baseline as the Latin
-/// font, and — when `scale_for_width` is set — scales them to exactly
-/// twice the Latin glyph width (only meaningful for a monospace grid, not
-/// for prose).
+/// font, and — when `scale_for_width` is set — scales them to
+/// [`CJK_MONO_CELL_FILL`] of twice the Latin glyph width (only meaningful
+/// for a monospace grid, not for prose).
 ///
 /// `egui` lays out every glyph using *its own* font's metrics — there's no
 /// built-in concept of a shared character cell across fonts — so two
@@ -144,7 +155,7 @@ fn cjk_fallback_tweak(latin_bytes: &[u8], cjk_bytes: &[u8], scale_for_width: boo
         // Binary-search the scale that makes the (already-scaled) CJK
         // advance exactly double the Latin one — avoids re-deriving the
         // relationship between `tweak.scale` and advance width by hand.
-        let target = 2.0 * latin_advance;
+        let target = 2.0 * latin_advance * CJK_MONO_CELL_FILL;
         let mut lo = 0.01_f32;
         let mut hi = 10.0_f32;
         for _ in 0..40 {
@@ -223,6 +234,56 @@ fn calibrate_baseline_offset_factor(latin_bytes: &[u8], cjk_bytes: &[u8], scale:
     let slope = REFERENCE_SIZE * cjk_font_scaling * scale;
 
     Some(gap / slope)
+}
+
+/// Lays out `text` so every character lands on the monospace grid: glyphs
+/// narrower than their one- or two-column cell (fullwidth CJK, which
+/// [`CJK_MONO_CELL_FILL`] deliberately draws small) get centered in it by
+/// padding half the slack before and half after.
+///
+/// `egui` has no per-glyph advance override, so the padding goes into
+/// [`egui::text::LayoutSection::leading_space`]: each padded character gets
+/// its own section, and the section after it carries its trailing half.
+fn monospace_grid_job(fonts: &egui::text::Fonts, text: &str, font_id: egui::FontId, wrap_width: f32) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, LayoutSection, TextFormat};
+
+    // Layout snaps the cursor to whole pixels after every glyph, so the
+    // column width that actually renders is the rounded one.
+    let ppp = fonts.pixels_per_point();
+    let cell = (fonts.glyph_width(&font_id, 'M') * ppp).round() / ppp;
+    let format = TextFormat::simple(font_id.clone(), egui::Color32::PLACEHOLDER);
+    let mut job = LayoutJob {
+        text: text.to_owned(),
+        wrap: egui::text::TextWrapping { max_width: wrap_width, ..Default::default() },
+        ..Default::default()
+    };
+    let push = |job: &mut LayoutJob, start: usize, end: usize, leading_space: f32| {
+        if start < end {
+            job.sections.push(LayoutSection { leading_space, byte_range: start..end, format: format.clone() });
+        }
+    };
+
+    let mut section_start = 0;
+    let mut section_leading = 0.0;
+    for (i, chr) in text.char_indices() {
+        if chr.is_ascii() {
+            continue;
+        }
+        let width = fonts.glyph_width(&font_id, chr);
+        let target = if width > cell * 1.25 { 2.0 * cell } else { cell };
+        let slack = target - width;
+        if slack <= 0.01 {
+            continue;
+        }
+        push(&mut job, section_start, i, section_leading);
+        let end = i + chr.len_utf8();
+        let pending = if section_start == i { section_leading } else { 0.0 };
+        push(&mut job, i, end, pending + slack / 2.0);
+        section_start = end;
+        section_leading = slack / 2.0;
+    }
+    push(&mut job, section_start, text.len(), section_leading);
+    job
 }
 
 /// A bit more breathing room and softer corners than egui's defaults, for a
@@ -532,12 +593,17 @@ impl TxtxtApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                        let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                        ui.fonts(|f| f.layout_job(monospace_grid_job(f, buf.as_str(), font_id, wrap_width)))
+                    };
                     ui.add_sized(
                         ui.available_size(),
                         egui::TextEdit::multiline(&mut tab.content)
                             .font(egui::TextStyle::Monospace)
                             .code_editor()
-                            .desired_width(f32::INFINITY),
+                            .desired_width(f32::INFINITY)
+                            .layouter(&mut layouter),
                     );
                 });
         });
@@ -683,7 +749,8 @@ mod tests {
         // granularity (1 / pixels_per_point) affects how tight a tolerance
         // is meaningful below.
         let fonts = Fonts::new(2.0, 8192, AlphaFromCoverage::default(), build_font_definitions());
-        let galley = fonts.layout_no_wrap("aa国あいうえおアイウエオ漢字".to_owned(), FontId::monospace(16.0), Color32::WHITE);
+        let job = monospace_grid_job(&fonts, "aa国あいうえおアイウエオ漢字１a", FontId::monospace(16.0), f32::INFINITY);
+        let galley = fonts.layout_job(job);
         let row = &galley.rows[0];
         // `pos.y` is the *font's own* baseline placement — identical for
         // every glyph that font renders, regardless of that glyph's
@@ -692,15 +759,25 @@ mod tests {
         let glyphs: Vec<_> = row.glyphs.iter().map(|g| (g.chr, g.advance_width, g.pos.y)).collect();
         println!("glyphs (chr, advance_width, pos.y): {glyphs:?}");
 
-        let ascii_width = glyphs[0].1;
-        for (chr, width, _) in &glyphs {
+        // Fullwidth glyphs are drawn at `CJK_MONO_CELL_FILL` of two columns
+        // and centered in them, so every glyph's center sits on its cell's.
+        let ascii_width = row.glyphs[1].pos.x - row.glyphs[0].pos.x;
+        let mut column_x = row.glyphs[0].pos.x;
+        for glyph in &row.glyphs {
+            let (chr, width) = (glyph.chr, glyph.advance_width);
+            let columns = if chr.is_ascii() { 1.0 } else { 2.0 };
+            let cell = columns * ascii_width;
             if !chr.is_ascii() {
-                let ratio = width / ascii_width;
+                let fill = width / (columns * glyphs[0].1);
                 assert!(
-                    (ratio - 2.0).abs() < 0.05,
-                    "{chr:?} width {width} is not ~2x ascii width {ascii_width} (ratio {ratio})"
+                    (fill - CJK_MONO_CELL_FILL).abs() < 0.02,
+                    "{chr:?} width {width} fills {fill} of its {cell} cell, expected {CJK_MONO_CELL_FILL}"
                 );
             }
+            let center = glyph.pos.x + width / 2.0;
+            let expected = column_x + cell / 2.0;
+            assert!((center - expected).abs() < 0.5, "{chr:?} centered at x={center}, expected x={expected}");
+            column_x += cell;
         }
 
         let ascii_y = glyphs[0].2;
