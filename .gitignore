@@ -1,0 +1,13 @@
+# Build output
+/target
+/txtxt.app
+
+# macOS
+.DS_Store
+._*
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*~
