@@ -8,6 +8,8 @@
 	<string>txtxt</string>
 	<key>CFBundleIdentifier</key>
 	<string>dev.kusumoto.txtxt</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>txtxt</string>
 	<key>CFBundlePackageType</key>

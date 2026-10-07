@@ -27,9 +27,10 @@ BUNDLE_DIR=".build/bundle/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
 
 rm -rf "${BUNDLE_DIR}"
-mkdir -p "${CONTENTS_DIR}/MacOS"
+mkdir -p "${CONTENTS_DIR}/MacOS" "${CONTENTS_DIR}/Resources"
 cp "$(swift build -c release --show-bin-path)/${APP_NAME}" "${CONTENTS_DIR}/MacOS/${APP_NAME}"
 cp "packaging/Info.plist" "${CONTENTS_DIR}/Info.plist"
+cp "packaging/AppIcon.icns" "${CONTENTS_DIR}/Resources/AppIcon.icns"
 codesign --force --sign - "${BUNDLE_DIR}"
 
 # Also place the bundle at the repo root so it's the obvious thing to
