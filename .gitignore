@@ -1,5 +1,5 @@
 # Build output
-/target
+/.build
 /txtxt.app
 
 # macOS
@@ -9,5 +9,6 @@
 # Editors / IDEs
 .idea/
 .vscode/
+.swiftpm/
 *.swp
 *~

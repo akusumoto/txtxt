@@ -1,139 +1,163 @@
 # txtxt — Spec
 
-A lightweight, native-feeling plain-text editor for macOS, written in Rust.
+A plain-text editor for macOS that looks and behaves like a native Mac app,
+written in Swift on AppKit.
 
 ## Goals
 
-- **Lightweight**: small binary, fast startup, low memory use. No Electron/webview,
-  no bundled browser runtime.
-- **Simple UI**: one window, a tab bar, a text area. No project sidebar, no
-  plugin system, no themes engine — just editing text.
-- **Multi-file**: open several files at once as tabs within a single window.
+- **Native**: real macOS menu bar, native window tabs, standard document
+  behavior (autosave, Revert, Open Recent, Rename/Move), native IME and
+  find bar — all from AppKit rather than reimplemented.
+- **Simple UI**: one window, tabs, a text area, a status bar. No project
+  sidebar, no plugin system, no themes engine.
+- **Japanese-friendly monospace**: mixed Latin/Japanese text stays on a
+  strict grid (see [CJK grid](#cjk-grid)).
+- **Small**: system frameworks only, plus `cmark-gfm` for Markdown; the
+  app bundle is under 1 MB.
 
-## Non-goals (v1)
+## Non-goals (for now)
 
 - Syntax highlighting / language servers
-- Split panes / multiple windows
+- Split panes
 - Plugins or extensions
-- Rich text editing (formatting toolbars, WYSIWYG) — the one exception is a
-  read-only Markdown preview, see below
+- Rich text editing — the one exception is a read-only Markdown preview
 - Settings UI (a couple of constants in code is enough for now)
-
-These may be revisited later, but are explicitly out of scope for the first
-implementation so the app stays small and easy to maintain.
 
 ## Tech stack
 
-| Concern            | Choice                                   |
-|---------------------|-------------------------------------------|
-| Language            | Rust (2024 edition)                       |
-| GUI                  | [`egui`](https://github.com/emilk/egui) via [`eframe`](https://docs.rs/eframe) — immediate-mode GUI, pure Rust, no webview |
-| Native file dialogs  | [`rfd`](https://docs.rs/rfd) — wraps the native macOS `NSOpenPanel`/`NSSavePanel` |
-| Markdown preview     | [`egui_commonmark`](https://docs.rs/egui_commonmark) (CommonMark via `pulldown-cmark`), `load-images`/syntax-highlighting features disabled to keep it light |
-| Packaging            | `scripts/bundle-mac.sh` produces `target/release/bundle/macos/txtxt.app` (also copied to `./txtxt.app`), a real bundle with `packaging/Info.plist`. Required for Finder double-click to launch the GUI directly instead of via Terminal.app (a bare Unix executable opens in Terminal when double-clicked). A real macOS menu bar is still a follow-up. |
-| Fonts                | System San Francisco (`SFNS.ttf`) for UI text and SF Mono (`SFNSMono.ttf`, falling back to Menlo) for the editor, loaded from `/System/Library/Fonts` at startup for a native, modern look — not bundled, to keep the binary small. Hiragino Sans is layered in as a fallback on both for Japanese glyphs, which `egui`'s built-in fonts don't cover. |
-| CJK fallback tuning  | `egui` lays out each fallback font using its own metrics, so a CJK font paired with an unrelated Latin font won't naturally land on a shared baseline (Proportional and Monospace families), or "1 CJK char = 2 ASCII chars" width (Monospace only). `cjk_fallback_tweak()` in `app.rs` computes the correct [`FontTweak`] at startup: `scale` via binary search (against `ab_glyph` advance metrics) so it's exact regardless of the specific rounding `epaint` applies internally, and `baseline_offset_factor` by running the *real* `egui` layout engine once at startup (`calibrate_baseline_offset_factor()`) and solving for the value that closes the measured gap — chosen over hand-deriving every rounding/centering term `epaint` applies internally (`FontImpl::new` in `epaint::text::font`), which turned out easy to get subtly wrong. Verified by `cjk_monospace_alignment`/`cjk_proportional_baseline_alignment` in `app.rs`'s test module, which run the same real layout engine against a range of kanji/hiragana/katakana. Self-corrects if a different font gets picked (e.g. Menlo instead of SF Mono). |
-
-`eframe`/`egui` was chosen over Tauri because it is a single Rust crate with
-no JS/web frontend and no bundled webview process — it compiles to one native
-binary, which best matches "lightweight."
+| Concern | Choice |
+|---|---|
+| Language | Swift 6 (strict concurrency), Swift Package Manager |
+| UI | AppKit: `NSDocument` + `NSWindowController` + `NSTextView` (TextKit 1). Not SwiftUI: on the macOS 27 SDK, SwiftUI needs the `SwiftUIMacros` compiler plugin, which ships only with full Xcode, and this project builds with just the Command Line Tools. |
+| Markdown preview | [`swift-cmark`](https://github.com/swiftlang/swift-cmark) (cmark-gfm: tables, strikethrough, autolinks, task lists) → HTML in a `WKWebView`, GitHub-like CSS that follows light/dark mode. Raw HTML in the source is not rendered. |
+| Fonts | SF Mono Regular (loaded from `SFNSMono.ttf`, see below) for the editor; Hiragino Sans W3 for Japanese. |
+| Packaging | `scripts/bundle-mac.sh` builds `./txtxt.app` (ad-hoc signed) with `packaging/Info.plist`, which declares the document types `NSDocument` needs. |
+| Tests | Swift Testing (`Tests/txtxtTests`). |
 
 ## Functional requirements
 
-### Tabs & files
+### Documents & tabs
 
-- App starts with one empty, untitled tab.
-- `File > New Tab` (⌘T) opens another empty, untitled tab.
-- `File > Open…` (⌘O) shows a native file picker; the chosen file opens in a
-  new tab. Opening the same file twice focuses the existing tab instead of
-  duplicating it.
-- Files can also be opened by dragging them onto the app / launching via
-  `open txtxt file.txt` (CLI args are opened as tabs at startup).
-- Each tab shows the file name (or "Untitled") and a `•` marker when the tab
-  has unsaved changes.
-- Clicking a tab switches to it. A close (`×`) button on each tab, and ⌘W,
-  close the active tab. Closing a tab with unsaved changes prompts
-  Save / Don't Save / Cancel.
-- ⌘S saves the active tab (Save As dialog if it's an untitled tab); ⌘⇧S is
-  always Save As.
-- Quitting the app with unsaved tabs prompts per-tab, same as closing a tab.
+- Each document is an `NSDocument` (`Document`, UTF-8 plain text) with one
+  window; every document window opens as a **native tab** of the existing
+  window (`tabbingMode = .preferred`, regardless of the system-wide tab
+  preference).
+- New (⌘N) and New Tab (⌘T, also the tab bar's `+`) open an untitled
+  document. Open… (⌘O), Open Recent, Finder "Open With", dropping files on
+  the Dock icon, and `open -a txtxt.app file…` all open files as tabs.
+  Opening an already-open file focuses its tab.
+- Any file opens (plain text, Markdown, source code, files with no
+  recognized type such as `Makefile`); files that aren't valid UTF-8 fail
+  to open with an error.
+- **Autosave in place** (like TextEdit): edits are saved automatically, and
+  the title bar shows "Edited" until then. File > Revert To Saved, Rename,
+  Move To, Duplicate and the version browser come from `NSDocument`.
+  Closing an untitled document with content asks whether to save it.
+- Save As accepts any extension the user types (`notes.md`, `.env`, …);
+  there's no file-format popup since every type is written the same way.
+- Session restore: windows and tabs reopen on relaunch (AppKit state
+  restoration).
 
 ### Editing
 
-- Single scrollable plain-text area per tab, monospace font.
-- Standard text editing behavior (selection, copy/paste/cut, undo/redo) comes
-  from `egui`'s built-in `TextEdit` widget.
-- No line-length limit; large files are handled by `egui`'s `TextEdit`
-  (acceptable for a lightweight plain-text tool; very large files, e.g.
-  hundreds of MB, are out of scope).
-- Tabs for `.md`/`.markdown` files show an **Edit / Preview** toggle (top
-  right of the menu bar), and open in Preview by default. Preview replaces
-  the whole tab with a read-only rendered view — there is no split view;
-  toggling to Edit shows the raw source. Non-markdown tabs never show the
-  toggle.
-- Line/column indicator and character count in a thin status bar at the
-  bottom of the window.
+- One scrollable plain-text `NSTextView` per tab, SF Mono 12 pt.
+- Native selection, undo/redo, IME (including inline Japanese
+  composition), find bar (⌘F / ⌥⌘F), Print. Smart quotes/dashes, text
+  replacement and spelling autocorrect are off.
+- Undo goes through the document's undo manager, which is what marks the
+  document edited.
+- Markdown files (`.md`, `.markdown`) get an **Edit / Preview** segmented
+  control in the toolbar (and View > Markdown Preview, ⌥⌘P), and open in
+  Preview. The preview covers the editor (the editor stays alive
+  underneath, so undo history survives toggling). Links in the preview open
+  in the default browser. The control appears/disappears when Save As
+  changes the file to/from Markdown.
+- Status bar: line and character count.
 
-### Window & menus
+### CJK grid
 
-- One native window, resizable, with the standard macOS title bar.
-- A minimal `File` menu (New Tab, Open…, Save, Save As…, Close Tab) rendered
-  as an in-window egui menu bar for v1 (a true macOS menu bar is a follow-up
-  once packaged as a `.app`).
-- Keyboard shortcuts are the primary interaction path; the menu bar mirrors
-  them for discoverability.
+`MonospaceGrid` keeps every character on a monospace grid: ASCII takes one
+SF Mono column, fullwidth characters exactly two, halfwidth katakana one.
+Verified by `MonospaceGridTests`, which lay text out with Core Text and
+check every glyph's origin.
 
-## Data model (sketch)
+- Fullwidth glyphs are drawn at 90% of their two-column cell
+  (`cjkCellFill`), so they don't look bigger than the Latin text; the rest
+  is added back as trailing `.tracking`.
+- `.kern` is pinned to 0, which disables Hiragino's pair kerning (it pulls
+  kana pairs like "アイ" together; any non-zero `.kern` adds to that instead
+  of replacing it).
+- SF Mono is loaded from its font file at weight 400, not via
+  `NSFont.monospacedSystemFont`: the system-font version adds
+  language-aware spacing after Japanese glyphs (~⅛ em before Latin, ½ em
+  after "。"), which breaks the grid.
+- Hiragino W3, not W4: W4 (especially fullwidth digits) looks bold next to
+  SF Mono Regular.
+- Every line gets the same height and baseline (a `NSLayoutManager`
+  delegate), so ASCII-only and Japanese lines are evenly spaced. That's
+  the reason for TextKit 1.
 
-```rust
-struct Tab {
-    path: Option<PathBuf>, // None = untitled, not yet saved
-    title: String,         // derived from path, or "Untitled"
-    content: String,       // current buffer text
-    saved_content: String, // last-saved text, used to detect dirty state
-}
+## Keyboard shortcuts
 
-struct TxtxtApp {
-    tabs: Vec<Tab>,
-    active: usize,
-    pending_close: Option<PendingClose>, // drives the save-prompt dialog
-}
+| Shortcut | Action |
+|---|---|
+| ⌘N / ⌘T | New document / new tab |
+| ⌘O | Open… |
+| ⌘S | Save… |
+| ⌘⇧S | Save As… |
+| ⌘W | Close tab |
+| ⌘⌥→ / ⌘⌥← | Next / previous tab (also ⌃Tab / ⌃⇧Tab) |
+| ⌥⌘P | Toggle Markdown preview |
+| ⌘F / ⌥⌘F | Find / Find and Replace |
+| ⌘P / ⌘⇧P | Print / Page Setup |
+
+## Building
+
+```sh
+./scripts/bundle-mac.sh   # → ./txtxt.app
 ```
 
-Dirty state is `tab.content != tab.saved_content` rather than a separate
-bool, so it can never drift out of sync.
+Tests (Swift Testing's macro plugin path has to be passed explicitly with
+the Command Line Tools):
 
-## Keyboard shortcuts (v1)
+```sh
+swift test -Xswiftc -plugin-path \
+  -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
+```
 
-| Shortcut | Action        |
-|----------|---------------|
-| ⌘N / ⌘T  | New tab       |
-| ⌘O       | Open…         |
-| ⌘S       | Save          |
-| ⌘⇧S      | Save As…      |
-| ⌘W       | Close tab     |
-| ⌘⌥→ / ⌘⌥←| Next / previous tab |
+If `swift build`/`swift test` fail with "Invalid manifest" (undefined
+`PackageDescription.Package.__allocating_init`), the Command Line Tools
+contain stale `*.private.swiftinterface` files from an older install.
+Remove them (`sudo rm
+/Library/Developer/CommandLineTools/usr/lib/swift/pm/*/*.swiftmodule/*.private.swiftinterface`)
+or reinstall the Command Line Tools. `bundle-mac.sh` works around it
+automatically.
 
 ## File structure
 
 ```
 txtxt/
-├── Cargo.toml
+├── Package.swift
 ├── SPEC.md
 ├── packaging/
-│   └── Info.plist    # .app bundle metadata
+│   └── Info.plist              # bundle metadata + document types
 ├── scripts/
-│   └── bundle-mac.sh # builds target/release/bundle/macos/txtxt.app
-└── src/
-    ├── main.rs   # entry point, eframe setup, CLI args
-    ├── app.rs    # TxtxtApp: state + egui UI + update loop
-    └── tab.rs    # Tab struct + load/save helpers
+│   └── bundle-mac.sh           # builds ./txtxt.app
+├── Sources/txtxt/
+│   ├── main.swift              # NSApplication entry point
+│   ├── AppDelegate.swift       # app delegate + menu bar
+│   ├── Document.swift          # NSDocument: load/save, Markdown detection
+│   ├── EditorWindowController.swift  # window: editor, preview, toolbar, status bar
+│   ├── MonospaceGrid.swift     # CJK grid fonts/attributes + text view factory
+│   └── MarkdownRenderer.swift  # cmark-gfm → HTML page
+└── Tests/txtxtTests/
 ```
 
-## Future enhancements (explicitly deferred)
+## Future enhancements
 
-- App icon and a native macOS menu bar (currently an in-window egui menu).
-- Session restore (reopen tabs from last run).
-- Basic syntax highlighting for common file types.
-- Find/replace within a tab.
+- App icon.
+- Syntax highlighting for common file types.
 - Word wrap toggle, font size setting.
+- Live-updating preview / split view.
+- Local images in the Markdown preview (`WKWebView` can't read files next
+  to the document yet).
