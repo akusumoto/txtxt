@@ -255,7 +255,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         range editedRange: NSRange,
         changeInLength delta: Int
     ) {
-        guard editedMask.contains(.editedCharacters) else { return }
+        // Attribute-only edits too: while composing with an IME, AppKit
+        // follows each marked-text change with one that resets the font to
+        // the typing attributes, which would leave the marked text in the
+        // smaller fallback font until it's committed.
         grid.apply(to: textStorage, in: editedRange)
     }
 }
