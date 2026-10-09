@@ -72,6 +72,8 @@ written in Swift on AppKit.
   underneath, so undo history survives toggling). Links in the preview open
   in the default browser. The control appears/disappears when Save As
   changes the file to/from Markdown.
+- Line numbers in the left margin (an `NSRulerView`); a wrapped line has
+  one number, and the current line's number is emphasized.
 - Status bar: line and character count.
 
 ### CJK grid

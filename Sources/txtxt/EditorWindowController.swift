@@ -11,6 +11,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private let grid: MonospaceGrid
     private let layoutDelegate: GridLayoutManagerDelegate
     private let scrollView: NSScrollView
+    private let lineNumbers: LineNumberRulerView
     private var textView: NSTextView { scrollView.documentView as! NSTextView }
     private let preview = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     private let statusLabel = NSTextField(labelWithString: "")
@@ -47,6 +48,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         grid = MonospaceGrid(fontSize: Self.fontSize)
         layoutDelegate = GridLayoutManagerDelegate(grid: grid)
         scrollView = grid.makeScrollableTextView(layoutDelegate: layoutDelegate)
+        lineNumbers = LineNumberRulerView(scrollView: scrollView, baselineOffset: grid.baselineOffset)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 820, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -108,6 +110,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         textView.textContainerInset = NSSize(width: 14, height: 14)
         textView.delegate = self
         textView.textStorage?.delegate = self
+        // The ruler is ours; keep NSTextView from managing it.
+        textView.usesRuler = false
+
+        scrollView.verticalRulerView = lineNumbers
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
     }
 
     private func buildContent(in window: NSWindow) {
@@ -247,6 +255,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
 
     private func textDidChange() {
         statusLabel.stringValue = TextStats(textView.string).summary
+        lineNumbers.textDidChange()
+    }
+
+    /// Highlights the current line's number.
+    func textViewDidChangeSelection(_ notification: Notification) {
+        lineNumbers.redraw()
     }
 
     func textStorage(
