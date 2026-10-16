@@ -61,6 +61,9 @@ written in Swift on AppKit.
 ### Editing
 
 - One scrollable plain-text `NSTextView` per tab, SF Mono 12 pt.
+- View > Zoom In / Zoom Out (⇧⌘+ / ⌘−) change the font size 1 pt at a
+  time, between 8 and 48 pt, for the current tab only (not saved). The grid,
+  line numbers and Markdown preview scale along.
 - Native selection, undo/redo, IME (including inline Japanese
   composition), find bar (⌘F / ⌥⌘F), Print. Smart quotes/dashes, text
   replacement and spelling autocorrect are off.
@@ -110,6 +113,7 @@ check every glyph's origin.
 | ⌘W | Close tab |
 | ⌘⌥→ / ⌘⌥← | Next / previous tab (also ⌃Tab / ⌃⇧Tab) |
 | ⌥⌘P | Toggle Markdown preview |
+| ⇧⌘+ / ⌘− | Zoom in / out |
 | ⌘F / ⌥⌘F | Find / Find and Replace |
 | ⌘P / ⌘⇧P | Print / Page Setup |
 
@@ -159,7 +163,7 @@ txtxt/
 
 - App icon.
 - Syntax highlighting for common file types.
-- Word wrap toggle, font size setting.
+- Word wrap toggle, a persistent font size setting.
 - Live-updating preview / split view.
 - Local images in the Markdown preview (`WKWebView` can't read files next
   to the document yet).

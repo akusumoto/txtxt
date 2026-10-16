@@ -20,6 +20,7 @@ struct MonospaceGrid {
     /// (1.0 = as tight as possible without glyphs touching).
     static let lineSpacing: CGFloat = 1.0
 
+    let fontSize: CGFloat
     let baseFont: NSFont
     /// Hiragino Sans W3 sized to `cjkCellFill`. W3 matches SF's regular
     /// stroke weight; W4 reads as bold next to it (especially digits).
@@ -33,6 +34,7 @@ struct MonospaceGrid {
     let baselineOffset: CGFloat
 
     init(fontSize: CGFloat) {
+        self.fontSize = fontSize
         baseFont = Self.sfMono(size: fontSize) ?? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
         cellWidth = Self.advance(of: "M", in: baseFont)
 
@@ -128,7 +130,7 @@ struct MonospaceGrid {
 
 /// Pins every line fragment to `MonospaceGrid`'s line height and baseline.
 final class GridLayoutManagerDelegate: NSObject, NSLayoutManagerDelegate {
-    let grid: MonospaceGrid
+    var grid: MonospaceGrid
 
     init(grid: MonospaceGrid) {
         self.grid = grid

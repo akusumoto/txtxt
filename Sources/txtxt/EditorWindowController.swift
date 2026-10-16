@@ -6,9 +6,10 @@ import WebKit
 final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate,
     NSToolbarDelegate, NSMenuItemValidation, WKNavigationDelegate
 {
-    static let fontSize: CGFloat = 12
+    static let defaultFontSize: CGFloat = 12
+    static let fontSizes: ClosedRange<CGFloat> = 8...48
 
-    private let grid: MonospaceGrid
+    private var grid: MonospaceGrid
     private let layoutDelegate: GridLayoutManagerDelegate
     private let scrollView: NSScrollView
     private let lineNumbers: LineNumberRulerView
@@ -45,10 +46,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     var printableView: NSView { textView }
 
     init() {
-        grid = MonospaceGrid(fontSize: Self.fontSize)
+        grid = MonospaceGrid(fontSize: Self.defaultFontSize)
         layoutDelegate = GridLayoutManagerDelegate(grid: grid)
         scrollView = grid.makeScrollableTextView(layoutDelegate: layoutDelegate)
-        lineNumbers = LineNumberRulerView(scrollView: scrollView, baselineOffset: grid.baselineOffset)
+        lineNumbers = LineNumberRulerView(scrollView: scrollView, grid: grid)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 820, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -213,11 +214,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(togglePreview(_:)) {
+        switch menuItem.action {
+        case #selector(togglePreview(_:)):
             menuItem.state = isPreviewing ? .on : .off
             return txtxtDocument?.isMarkdown ?? false
+        case #selector(zoomIn(_:)):
+            return grid.fontSize < Self.fontSizes.upperBound
+        case #selector(zoomOut(_:)):
+            return grid.fontSize > Self.fontSizes.lowerBound
+        default:
+            return true
         }
-        return true
     }
 
     private func updateMode() {
@@ -238,6 +245,41 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         }
         NSWorkspace.shared.open(url)
         return .cancel
+    }
+
+    // MARK: Zoom
+
+    @objc func zoomIn(_ sender: Any?) {
+        setFontSize(grid.fontSize + 1)
+    }
+
+    @objc func zoomOut(_ sender: Any?) {
+        setFontSize(grid.fontSize - 1)
+    }
+
+    /// Per tab, like a browser's zoom; the preview scales along.
+    private func setFontSize(_ size: CGFloat) {
+        let size = min(max(size, Self.fontSizes.lowerBound), Self.fontSizes.upperBound)
+        guard size != grid.fontSize else { return }
+        grid = MonospaceGrid(fontSize: size)
+        layoutDelegate.grid = grid
+        lineNumbers.grid = grid
+
+        let textView = textView
+        textView.font = grid.baseFont
+        textView.typingAttributes = grid.baseAttributes
+        if let storage = textView.textStorage, let layoutManager = textView.layoutManager {
+            let all = NSRange(location: 0, length: storage.length)
+            // Attribute edits don't go through the undo manager, so the
+            // document isn't marked edited.
+            storage.beginEditing()
+            grid.apply(to: storage, in: all)
+            storage.endEditing()
+            // Line heights come from the layout delegate, which the
+            // attribute change alone doesn't cover (e.g. an empty document).
+            layoutManager.invalidateLayout(forCharacterRange: all, actualCharacterRange: nil)
+        }
+        preview.pageZoom = size / Self.defaultFontSize
     }
 
     // MARK: Editing

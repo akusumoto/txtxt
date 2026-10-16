@@ -114,6 +114,11 @@ enum MainMenu {
         menu.addItem(withTitle: "Markdown Preview", action: #selector(EditorWindowController.togglePreview(_:)), keyEquivalent: "p")
             .keyEquivalentModifierMask = [.command, .option]
         menu.addItem(.separator())
+        // "+" is typed with Shift on most layouts (⇧= on US, ⇧; on JIS), so
+        // ⌘+ is ⇧⌘+ on the keyboard.
+        menu.addItem(withTitle: "Zoom In", action: #selector(EditorWindowController.zoomIn(_:)), keyEquivalent: "+")
+        menu.addItem(withTitle: "Zoom Out", action: #selector(EditorWindowController.zoomOut(_:)), keyEquivalent: "-")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Show Tab Bar", action: #selector(NSWindow.toggleTabBar(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Show All Tabs", action: #selector(NSWindow.toggleTabOverview(_:)), keyEquivalent: "\\")
             .keyEquivalentModifierMask = [.command, .shift]

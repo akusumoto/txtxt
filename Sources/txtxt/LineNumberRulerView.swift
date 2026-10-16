@@ -6,9 +6,16 @@ final class LineNumberRulerView: NSRulerView {
     private static let padding: CGFloat = 8
     private static let minimumDigits = 3
 
-    private let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
-    /// The text's baseline within a line fragment, so numbers sit on it.
-    private let baselineOffset: CGFloat
+    /// The editor's grid: numbers sit on its baseline, at ⅚ of its size.
+    var grid: MonospaceGrid {
+        didSet {
+            font = Self.font(for: grid)
+            updateThickness()
+            needsDisplay = true
+        }
+    }
+
+    private var font: NSFont
     /// UTF-16 offset of each line's first character. Rebuilt lazily after
     /// edits; a trailing newline starts a last (empty) line here, since
     /// that's where the insertion point goes.
@@ -16,8 +23,9 @@ final class LineNumberRulerView: NSRulerView {
 
     private var textView: NSTextView? { clientView as? NSTextView }
 
-    init(scrollView: NSScrollView, baselineOffset: CGFloat) {
-        self.baselineOffset = baselineOffset
+    init(scrollView: NSScrollView, grid: MonospaceGrid) {
+        self.grid = grid
+        font = Self.font(for: grid)
         super.init(scrollView: scrollView, orientation: .verticalRuler)
         clientView = scrollView.documentView
         reservedThicknessForMarkers = 0
@@ -39,6 +47,10 @@ final class LineNumberRulerView: NSRulerView {
 
     required init(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
+    }
+
+    private static func font(for grid: MonospaceGrid) -> NSFont {
+        .monospacedDigitSystemFont(ofSize: grid.fontSize * 5 / 6, weight: .regular)
     }
 
     override var isFlipped: Bool { true }
@@ -102,7 +114,7 @@ final class LineNumberRulerView: NSRulerView {
         let containerOrigin = textView.textContainerOrigin
 
         func drawNumber(ofLine index: Int, fragmentTop: CGFloat) {
-            let baseline = convert(NSPoint(x: 0, y: fragmentTop + containerOrigin.y + baselineOffset), from: textView).y
+            let baseline = convert(NSPoint(x: 0, y: fragmentTop + containerOrigin.y + grid.baselineOffset), from: textView).y
             let label = NSAttributedString(
                 string: String(index + 1),
                 attributes: [
