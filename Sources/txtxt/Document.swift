@@ -50,6 +50,31 @@ final class Document: NSDocument {
         Data(text.utf8)
     }
 
+    // MARK: External changes
+
+    /// Reload silently when another process rewrites the file, as long as
+    /// there are no unsaved edits. With edits, AppKit's usual prompt decides.
+    override func presentedItemDidChange() {
+        DispatchQueue.main.async { [self] in
+            guard !isDocumentEdited, let url = fileURL, let type = fileType,
+                  let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            else {
+                forwardPresentedItemDidChange()
+                return
+            }
+            if let known = fileModificationDate, modified <= known { return }
+            do {
+                try revert(toContentsOf: url, ofType: type)
+            } catch {
+                presentError(error)
+            }
+        }
+    }
+
+    private func forwardPresentedItemDidChange() {
+        super.presentedItemDidChange()
+    }
+
     override var fileURL: URL? {
         // Only ever set on the main thread, since we don't opt into
         // asynchronous saving (`canAsynchronouslyWrite`).

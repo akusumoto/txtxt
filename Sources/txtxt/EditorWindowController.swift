@@ -298,6 +298,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private func textDidChange() {
         statusLabel.stringValue = TextStats(textView.string).summary
         lineNumbers.textDidChange()
+        if isPreviewing { updateMode() }
     }
 
     /// Highlights the current line's number.
