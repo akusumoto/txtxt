@@ -56,7 +56,7 @@ enum MarkdownRenderer {
       font: 15px/1.6 -apple-system, "Hiragino Sans", sans-serif;
       -webkit-font-smoothing: antialiased;
     }
-    article { max-width: 820px; margin: 0 auto; padding: 28px 36px 48px; }
+    article { padding: 28px 36px 48px; }
     h1, h2, h3, h4, h5, h6 { margin: 1.5em 0 .6em; line-height: 1.25; font-weight: 600; }
     h1 { font-size: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
     h2 { font-size: 1.5em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
