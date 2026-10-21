@@ -4,7 +4,7 @@ import WebKit
 /// One document window (= one native tab): the editor, a Markdown preview
 /// over it, and a status bar.
 final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate,
-    NSToolbarDelegate, NSMenuItemValidation, WKNavigationDelegate
+    NSToolbarDelegate, NSMenuItemValidation, WKNavigationDelegate, NSSearchFieldDelegate
 {
     static let defaultFontSize: CGFloat = 12
     static let fontSizes: ClosedRange<CGFloat> = 8...48
@@ -15,6 +15,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private let lineNumbers: LineNumberRulerView
     private var textView: NSTextView { scrollView.documentView as! NSTextView }
     private let preview = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    private let findField = NSSearchField()
+    private let findBar = NSVisualEffectView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(
         images: [
@@ -123,6 +125,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         preview.navigationDelegate = self
         preview.isHidden = true
 
+        findField.placeholderString = "Find"
+        findField.delegate = self
+        findBar.material = .popover
+        findBar.blendingMode = .withinWindow
+        findBar.wantsLayer = true
+        findBar.layer?.cornerRadius = 8
+        findBar.isHidden = true
+        findField.translatesAutoresizingMaskIntoConstraints = false
+        findBar.translatesAutoresizingMaskIntoConstraints = false
+        findBar.addSubview(findField)
+
         statusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         statusLabel.textColor = .secondaryLabelColor
 
@@ -137,7 +150,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
             view.translatesAutoresizingMaskIntoConstraints = false
         }
         statusBar.addSubview(statusLabel)
-        for view in [scrollView, preview, separator, statusBar] as [NSView] {
+        for view in [scrollView, preview, separator, statusBar, findBar] as [NSView] {
             content.addSubview(view)
         }
 
@@ -151,6 +164,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
             preview.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
             preview.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
             preview.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+
+            findBar.topAnchor.constraint(equalTo: preview.topAnchor, constant: 8),
+            findBar.trailingAnchor.constraint(equalTo: preview.trailingAnchor, constant: -16),
+            findBar.widthAnchor.constraint(equalToConstant: 260),
+            findField.topAnchor.constraint(equalTo: findBar.topAnchor, constant: 6),
+            findField.bottomAnchor.constraint(equalTo: findBar.bottomAnchor, constant: -6),
+            findField.leadingAnchor.constraint(equalTo: findBar.leadingAnchor, constant: 6),
+            findField.trailingAnchor.constraint(equalTo: findBar.trailingAnchor, constant: -6),
 
             separator.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -230,6 +251,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
     private func updateMode() {
         modeControl.selectedSegment = isPreviewing ? 1 : 0
         preview.isHidden = !isPreviewing
+        if !isPreviewing { findBar.isHidden = true }
         if isPreviewing {
             preview.loadHTMLString(MarkdownRenderer.page(from: text), baseURL: txtxtDocument?.fileURL?.deletingLastPathComponent())
             window?.makeFirstResponder(preview)
@@ -245,6 +267,62 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSText
         }
         NSWorkspace.shared.open(url)
         return .cancel
+    }
+
+    // MARK: Find
+
+    /// The text view handles Find itself; the preview (a web view, which has
+    /// no find UI on macOS) gets a small search field over its top corner.
+    @objc func performFindPanelAction(_ sender: Any?) {
+        guard isPreviewing else { return }
+        let tag = (sender as? NSMenuItem)?.tag ?? NSTextFinder.Action.showFindInterface.rawValue
+        switch NSTextFinder.Action(rawValue: tag) {
+        case .nextMatch: findInPreview(backwards: false)
+        case .previousMatch: findInPreview(backwards: true)
+        default: showFindField()
+        }
+    }
+
+    private func showFindField() {
+        findBar.isHidden = false
+        window?.makeFirstResponder(findField)
+        findField.selectText(nil)
+    }
+
+    private func hideFindField() {
+        findBar.isHidden = true
+        preview.evaluateJavaScript("window.getSelection().removeAllRanges()")
+        window?.makeFirstResponder(preview)
+    }
+
+    private func findInPreview(backwards: Bool) {
+        let query = findField.stringValue
+        guard !query.isEmpty else { return }
+        let configuration = WKFindConfiguration()
+        configuration.backwards = backwards
+        configuration.wraps = true
+        configuration.caseSensitive = false
+        preview.find(query, configuration: configuration) { result in
+            if !result.matchFound { NSSound.beep() }
+        }
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        findInPreview(backwards: false)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === findField else { return false }
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)):
+            findInPreview(backwards: NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false)
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            hideFindField()
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: Zoom
